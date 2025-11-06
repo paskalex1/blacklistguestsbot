@@ -1,3 +1,6 @@
+from html import escape
+from datetime import datetime
+
 from aiogram import Router, F, Bot
 from aiogram.types import (
     Message,
@@ -8,15 +11,18 @@ from aiogram.types import (
 from aiogram.filters import CommandStart, Command
 from aiogram.enums import ChatMemberStatus
 from aiogram.fsm.context import FSMContext
+from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from .config import CHANNEL_USERNAME, ADMIN_IDS
 from .states import ReportGuest
 from .keyboards import start_keyboard, countries_keyboard, photos_keyboard
 from .countries import load_countries, save_countries
-from html import escape
 
 router = Router()
 MAX_PHOTOS = 10
+
+# Память для заявок на модерацию: id -> словарь с данными
+pending_reports: dict[str, dict] = {}
 
 
 async def check_subscription(bot: Bot, user_id: int) -> bool:
@@ -26,6 +32,169 @@ async def check_subscription(bot: Bot, user_id: int) -> bool:
         ChatMemberStatus.ADMINISTRATOR,
         ChatMemberStatus.CREATOR,
     }
+
+
+def build_post_text(
+    country: str,
+    city: str,
+    guest_name: str,
+    phone: str,
+    description: str,
+) -> str:
+    """Форматируем текст поста для канала/модерации (HTML)."""
+    country_html = escape(country)
+    city_html = escape(city)
+    guest_name_html = escape(guest_name)
+    phone_html = escape(phone)
+    description_html = escape(description)
+
+    title = "⚠️ <b>Нежелательный гость</b>"
+    meta = (
+        f"<b>Страна:</b> {country_html}\n"
+        f"<b>Город:</b> {city_html}\n"
+        f"<b>ФИО гостя:</b> {guest_name_html}\n"
+        f"<b>Телефон:</b> {phone_html}"
+    )
+    body = f"<b>Описание ситуации:</b>\n{description_html}"
+
+    return f"{title}\n\n{meta}\n\n{body}"
+
+
+def moderation_keyboard(report_id: str):
+    kb = InlineKeyboardBuilder()
+    kb.button(text="✅ Опубликовать", callback_data=f"mod_approve:{report_id}")
+    kb.button(text="🚫 Отклонить", callback_data=f"mod_reject:{report_id}")
+    kb.adjust(2)
+    return kb.as_markup()
+
+
+async def queue_report_for_moderation(
+    message: Message,
+    state: FSMContext,
+    bot: Bot,
+    with_photos: bool,
+):
+    """Сохраняем заявку и отправляем её на модерацию админам."""
+
+    data = await state.get_data()
+    country = data["country"]
+    city = data["city"]
+    guest_name = data["guest_name"]
+    phone = data["phone"]
+    description = data["description"]
+    photo_ids: list[str] = data.get("photo_ids", [])
+
+    post_text = build_post_text(
+        country=country,
+        city=city,
+        guest_name=guest_name,
+        phone=phone,
+        description=description,
+    )
+
+    # id заявки: userId_timestamp
+    report_id = f"{message.from_user.id}_{int(datetime.now().timestamp())}"
+
+    report = {
+        "id": report_id,
+        "user_id": message.from_user.id,
+        "user_username": message.from_user.username,
+        "user_first_name": message.from_user.first_name,
+        "country": country,
+        "city": city,
+        "guest_name": guest_name,
+        "phone": phone,
+        "description": description,
+        "photo_ids": photo_ids if with_photos else [],
+        "created_at": datetime.now().isoformat(),
+    }
+
+    pending_reports[report_id] = report
+
+    # Уведомляем пользователя
+    await message.answer(
+        "Ваш кейс отправлен на модерацию. "
+        "После проверки он будет опубликован в канале или отклонён модератором.",
+        reply_markup=ReplyKeyboardRemove(),
+    )
+
+    # Сбрасываем состояния и возвращаем на старт
+    await state.clear()
+    await message.answer(
+        f"Чтобы добавить нежелательного гостя, вы должны быть подписаны на канал {CHANNEL_USERNAME}",
+        reply_markup=start_keyboard(),
+    )
+
+    # Отправляем заявку всем админам
+    admins = ADMIN_IDS or []
+    sender_username = (
+        f"@{message.from_user.username}" if message.from_user.username else "без никнейма"
+    )
+
+    for admin_id in admins:
+        try:
+            # 1) если есть фото — сначала медиа-группа с полным текстом
+            if report["photo_ids"]:
+                media = []
+                for i, pid in enumerate(report["photo_ids"]):
+                    if i == 0:
+                        # первая фотка с подписью (весь текст поста)
+                        media.append(InputMediaPhoto(media=pid, caption=post_text))
+                    else:
+                        media.append(InputMediaPhoto(media=pid))
+                await bot.send_media_group(chat_id=admin_id, media=media)
+
+                control_text = (
+                    f"Новая заявка <b>#{report_id}</b> на публикацию в {CHANNEL_USERNAME}\n\n"
+                    f"Отправитель: {sender_username} (ID: <code>{message.from_user.id}</code>)\n\n"
+                    f"Фото: {len(report['photo_ids'])} шт.\n"
+                )
+            else:
+                # 2) если фото нет — всё в одном тексте
+                control_text = (
+                    f"Новая заявка <b>#{report_id}</b> на публикацию в {CHANNEL_USERNAME}\n\n"
+                    f"Отправитель: {sender_username} (ID: <code>{message.from_user.id}</code>)\n\n"
+                    f"{post_text}"
+                )
+
+            # Сообщение с кнопками модерации (всегда отдельное)
+            await bot.send_message(
+                admin_id,
+                text=control_text,
+                reply_markup=moderation_keyboard(report_id),
+            )
+        except Exception:
+            # если какому-то админу нельзя написать, просто пропускаем
+            continue
+
+
+async def publish_report_to_channel(report: dict, bot: Bot):
+    """Публикуем уже одобренный пост в канал."""
+
+    post_text = build_post_text(
+        country=report["country"],
+        city=report["city"],
+        guest_name=report["guest_name"],
+        phone=report["phone"],
+        description=report["description"],
+    )
+    photo_ids: list[str] = report.get("photo_ids") or []
+
+    if photo_ids:
+        media = []
+        for i, pid in enumerate(photo_ids):
+            if i == 0:
+                media.append(InputMediaPhoto(media=pid, caption=post_text))
+            else:
+                media.append(InputMediaPhoto(media=pid))
+        await bot.send_media_group(chat_id=CHANNEL_USERNAME, media=media)
+    else:
+        await bot.send_message(chat_id=CHANNEL_USERNAME, text=post_text)
+
+
+# =========================
+# ОСНОВНОЙ СЦЕНАРИЙ ПОЛЬЗОВАТЕЛЯ
+# =========================
 
 
 # /start
@@ -63,7 +232,7 @@ async def cb_add_guest(callback: CallbackQuery, state: FSMContext, bot: Bot):
 # Выбор страны
 @router.callback_query(
     ReportGuest.country,
-    F.data.startswith("country:")
+    F.data.startswith("country:"),
 )
 async def cb_country(callback: CallbackQuery, state: FSMContext):
     country = callback.data.split(":", 1)[1]
@@ -151,7 +320,7 @@ async def collect_photos(message: Message, state: FSMContext):
         await message.answer(
             f"Можно загрузить не более {MAX_PHOTOS} фото. "
             "Нажмите «Подтвердить» или «Пропустить».",
-            reply_markup=photos_keyboard(),   # ← возвращаем меню
+            reply_markup=photos_keyboard(),
         )
         return
 
@@ -161,78 +330,92 @@ async def collect_photos(message: Message, state: FSMContext):
 
     await message.answer(
         f"Фото добавлено ({len(photo_ids)}/{MAX_PHOTOS}).",
-        reply_markup=photos_keyboard(),       # ← и здесь возвращаем меню
+        reply_markup=photos_keyboard(),
     )
 
 
-# Нажали «Пропустить» — публикуем без фото
+# Нажали «Пропустить» — отправляем на модерацию без фото
 @router.message(ReportGuest.photos, F.text == "Пропустить")
 async def msg_skip_photos(message: Message, state: FSMContext, bot: Bot):
-    await publish_post(message, state, bot, with_photos=False)
+    await queue_report_for_moderation(message, state, bot, with_photos=False)
 
 
-# Нажали «Подтвердить» — публикуем с фото
+# Нажали «Подтвердить» — отправляем на модерацию с фото (если есть)
 @router.message(ReportGuest.photos, F.text == "Подтвердить")
 async def msg_confirm_photos(message: Message, state: FSMContext, bot: Bot):
-    await publish_post(message, state, bot, with_photos=True)
+    await queue_report_for_moderation(message, state, bot, with_photos=True)
 
 
-async def publish_post(message: Message, state: FSMContext, bot: Bot, with_photos: bool):
-    data = await state.get_data()
-    country = data["country"]
-    city = data["city"]
-    guest_name = data["guest_name"]
-    phone = data["phone"]
-    description = data["description"]
-    photo_ids: list[str] = data.get("photo_ids", [])
-
-    # Экранируем пользовательский текст на всякий случай
-    country_html = escape(country)
-    city_html = escape(city)
-    guest_name_html = escape(guest_name)
-    phone_html = escape(phone)
-    description_html = escape(description)
-
-    title = "⚠️ <b>Нежелательный гость</b>"
-    meta = (
-        f"<b>Страна:</b> {country_html}\n"
-        f"<b>Город:</b> {city_html}\n"
-        f"<b>ФИО гостя:</b> {guest_name_html}\n"
-        f"<b>Телефон:</b> {phone_html}"
-    )
-    body = f"<b>Описание ситуации:</b>\n{description_html}"
-
-    post_text = f"{title}\n\n{meta}\n\n{body}"
-
-    if with_photos and photo_ids:
-        media = []
-        for i, pid in enumerate(photo_ids):
-            if i == 0:
-                # первая фотка с подписью
-                media.append(InputMediaPhoto(media=pid, caption=post_text))
-            else:
-                media.append(InputMediaPhoto(media=pid))
-        await bot.send_media_group(chat_id=CHANNEL_USERNAME, media=media)
-    else:
-        await bot.send_message(chat_id=CHANNEL_USERNAME, text=post_text)
-
-    # Ответ пользователю + убираем меню
-    await message.answer(
-        "Ваш пост отправлен на канал. Спасибо!",
-        reply_markup=ReplyKeyboardRemove()
-    )
-
-    # Сбрасываем состояние
-    await state.clear()
-
-    # Показываем первое сообщение с кнопкой «Добавить нежелательного гостя»
-    await message.answer(
-        f"Чтобы добавить нежелательного гостя, вы должны быть подписаны на канал {CHANNEL_USERNAME}",
-        reply_markup=start_keyboard()
-    )
+# =========================
+# ХЕНДЛЕРЫ МОДЕРАЦИИ (для админов)
+# =========================
 
 
-# --- Простейшие админ-команды для стран ---
+@router.callback_query(F.data.startswith("mod_approve:"))
+async def cb_mod_approve(callback: CallbackQuery, bot: Bot):
+    if callback.from_user.id not in ADMIN_IDS:
+        await callback.answer("У вас нет прав для модерации.", show_alert=True)
+        return
+
+    report_id = callback.data.split(":", 1)[1]
+    report = pending_reports.pop(report_id, None)
+
+    if not report:
+        await callback.answer(
+            "Заявка не найдена или уже обработана.",
+            show_alert=True,
+        )
+        return
+
+    await publish_report_to_channel(report, bot)
+
+    # Уведомляем пользователя
+    user_id = report["user_id"]
+    try:
+        await bot.send_message(
+            user_id,
+            "Ваш кейс прошёл модерацию и опубликован в канале.",
+        )
+    except Exception:
+        pass
+
+    await callback.message.answer(f"Заявка #{report_id} опубликована.")
+    await callback.answer("Опубликовано", show_alert=False)
+
+
+@router.callback_query(F.data.startswith("mod_reject:"))
+async def cb_mod_reject(callback: CallbackQuery, bot: Bot):
+    if callback.from_user.id not in ADMIN_IDS:
+        await callback.answer("У вас нет прав для модерации.", show_alert=True)
+        return
+
+    report_id = callback.data.split(":", 1)[1]
+    report = pending_reports.pop(report_id, None)
+
+    if not report:
+        await callback.answer(
+            "Заявка не найдена или уже обработана.",
+            show_alert=True,
+        )
+        return
+
+    # Уведомляем пользователя об отказе
+    user_id = report["user_id"]
+    try:
+        await bot.send_message(
+            user_id,
+            "Ваш кейс был отклонён модератором и не был опубликован в канале.",
+        )
+    except Exception:
+        pass
+
+    await callback.message.answer(f"Заявка #{report_id} отклонена.")
+    await callback.answer("Отклонено", show_alert=False)
+
+
+# =========================
+# АДМИН-КОМАНДЫ ДЛЯ СТРАН
+# =========================
 
 
 @router.message(Command("list_countries"))
