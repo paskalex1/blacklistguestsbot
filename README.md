@@ -39,10 +39,6 @@ blacklistguestsbot/
 ├── requirements.txt # Список зависимостей
 ├── run.py # Точка входа (запуск бота)
 └── .venv/ # Виртуальное окружение Python
-
-yaml
-Копировать код
-
 ---
 
 ## 🔐 Файл `.env` (пример)
@@ -57,8 +53,6 @@ ADMIN_IDS — Telegram ID модераторов через запятую
 Узнать свой ID можно у бота @userinfobot
 
 🚀 Установка на сервер (Ubuntu)
-bash
-Копировать код
 sudo apt update
 sudo apt install -y git python3-venv
 sudo mkdir -p /opt/blacklistguestsbot
@@ -72,17 +66,13 @@ pip install --upgrade pip
 pip install -r requirements.txt
 
 nano .env    # вставь данные из примера выше
-Проверка работы:
 
-bash
-Копировать код
+Проверка работы:
 python run.py
 Если бот отвечает в Telegram → всё ок ✅
 Останавливаешь (Ctrl + C) и создаёшь systemd-сервис.
 
 🧩 systemd-сервис /etc/systemd/system/blacklistguestsbot.service
-ini
-Копировать код
 [Unit]
 Description=Telegram bot: blacklistguestsbot
 After=network.target
@@ -96,31 +86,25 @@ Restart=always
 
 [Install]
 WantedBy=multi-user.target
-Активировать:
 
-bash
-Копировать код
+Активировать:
 sudo systemctl daemon-reload
 sudo systemctl enable blacklistguestsbot
 sudo systemctl start blacklistguestsbot
 sudo systemctl status blacklistguestsbot
+
 Проверить логи:
-
-bash
-Копировать код
 sudo journalctl -u blacklistguestsbot -f
-🔄 Обновление бота через Git
-На локальной машине:
 
-bash
-Копировать код
+
+🔄 Обновление бота через Git
+
+На локальной машине:
 git add .
 git commit -m "feat: добавлена модерация постов"
 git push origin main
-На сервере:
 
-bash
-Копировать код
+На сервере:
 ssh root@your-server
 cd /opt/blacklistguestsbot
 git pull
@@ -130,8 +114,6 @@ sudo systemctl restart blacklistguestsbot
 sudo systemctl status blacklistguestsbot
 
 🛠️ Полезные команды
-bash
-Копировать код
 sudo systemctl stop blacklistguestsbot      # остановить
 sudo systemctl start blacklistguestsbot     # запустить
 sudo systemctl restart blacklistguestsbot   # перезапустить
