@@ -20,6 +20,10 @@ def countries_keyboard() -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     for country in load_countries():
         kb.button(text=country, callback_data=f"country:{country}")
+
+    # Добавляем кнопку "Другая страна"
+    kb.button(text="Другая страна", callback_data="country:other")
+
     # ОДНА кнопка в строке
     kb.adjust(1)
     return kb.as_markup()

@@ -235,12 +235,33 @@ async def cb_add_guest(callback: CallbackQuery, state: FSMContext, bot: Bot):
     F.data.startswith("country:"),
 )
 async def cb_country(callback: CallbackQuery, state: FSMContext):
-    country = callback.data.split(":", 1)[1]
+    value = callback.data.split(":", 1)[1]
+
+    # Пользователь выбрал "Другая страна"
+    if value == "other":
+        await callback.message.answer("Напишите вашу страну.")
+        await state.set_state(ReportGuest.custom_country)
+        await callback.answer()
+        return
+
+    # Обычная страна из списка
+    country = value
     await state.update_data(country=country)
     await callback.message.answer("Отлично!")
     await callback.message.answer("Теперь напишите ваш город.")
     await state.set_state(ReportGuest.city)
     await callback.answer()
+
+
+# Пользователь вводит свою страну вручную
+@router.message(ReportGuest.custom_country)
+async def msg_custom_country(message: Message, state: FSMContext):
+    country = message.text.strip()
+    await state.update_data(country=country)
+
+    await message.answer("Отлично!")
+    await message.answer("Теперь напишите ваш город.")
+    await state.set_state(ReportGuest.city)
 
 
 # Город
