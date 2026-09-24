@@ -1,138 +1,27 @@
-# 🕵️‍♂️ Telegram Bot — @blacklistguestsbot  
-### Проект: «Нежелательные гости»
+# blacklistguestsbot
 
-Бот для сбора и модерации кейсов от отельеров о недобросовестных гостях.  
-Работает на **aiogram 3**, размещён на сервере под управлением **Ubuntu**.  
-Посты публикуются в канал **[@blacklistguests](https://t.me/blacklistguests)** после модерации.
+Telegram-бот на Python и aiogram 3 для приёма сообщений о проблемных гостях в краткосрочном размещении. Автор заявки заполняет форму, модератор решает, публиковать ли её в [канале](https://t.me/blacklistguests). Это репозиторий исходного кода, а не публичная база заявок.
 
----
+## Что реализовано
 
-## ⚙️ Основные функции
+- Проверка подписки на канал перед подачей заявки.
+- Пошаговая форма: страна, город, имя гостя, телефон, описание и до 10 фотографий. Можно указать страну вручную.
+- Отправка заявки модераторам; одобрение публикует её в канале, отклонение не публикует. Бот пытается уведомить автора о решении.
+- Команды модератора `/add_country`, `/del_country`, `/list_countries` для списка стран в `data/countries.json`.
 
-- Проверка подписки на канал перед добавлением кейса  
-- Пошаговое заполнение: страна → город → ФИО → телефон → описание → фото  
-- Проверка корректности номера телефона  
-- Возможность добавить до 10 фото  
-- Модерация: посты отправляются администраторам для одобрения или отклонения  
-- После одобрения — автоматическая публикация в канал  
-- После отклонения — уведомление пользователю  
-- Управление странами через команды `/add_country`, `/del_country`, `/list_countries`
+Заявки, ожидающие модерации, находятся в памяти процесса (`pending_reports`), а не в постоянной базе. Перезапуск процесса может привести к их потере. Хранилища кейсов, поиска по гостям и статистики в этом коде нет. Владелец сообщает об использовании бота в production, но работоспособность сервиса не проверялась при оформлении этого README.
 
----
+## Структура и локальный запуск
 
-## 📁 Структура проекта
+- `bot/handlers.py` - анкета, очередь в памяти, действия модераторов и публикация.
+- `bot/states.py`, `bot/keyboards.py` - состояния формы и кнопки.
+- `bot/countries.py`, `data/countries.json` - список стран.
+- `run.py` - точка входа; `requirements.txt` - зависимости.
 
-```text
-blacklistguestsbot/
-│
-├── bot/
-│   ├── __init__.py
-│   ├── config.py              # Подгрузка .env, токен, список админов
-│   ├── handlers.py            # Основная логика бота + модерация
-│   ├── keyboards.py           # Клавиатуры (меню, кнопки)
-│   ├── states.py              # FSM-состояния
-│   └── countries.py           # Загрузка и сохранение списка стран
-│
-├── data/
-│   └── countries.json         # Файл со списком стран
-│
-├── .env                       # Секретные данные (см. ниже)
-├── requirements.txt           # Список зависимостей
-├── run.py                     # Точка входа (запуск бота)
-└── .venv/                     # Виртуальное окружение Python
+Установите зависимости из `requirements.txt` в своём виртуальном окружении. Для своего тестового экземпляра задайте в локальном `.env` значения `BOT_TOKEN`, `ADMIN_IDS` (Telegram ID модераторов через запятую) и при необходимости `CHANNEL_USERNAME`, затем запустите `python run.py`. Не коммитьте `.env` или реальные заявки. Для проверки подписки и публикации боту нужны соответствующие права в вашем канале. Этот раздел не является инструкцией по управлению действующим сервисом владельца.
 
----
+## Данные и лицензия
 
-## 🔐 Файл `.env` (пример)
+Анкета обрабатывает имена, телефоны, описание и фотографии. Не публикуйте реальные сведения о людях в issue, PR, тестовых данных или примерах. Перед использованием такого процесса оцените правовые основания обработки и публикации персональных данных; наличие модерации само по себе их не подтверждает.
 
-Создаётся в корне проекта:
-
-```env
-BOT_TOKEN=1234567890:AAAbbbCCCDDDeeeFFFgggHHHiiiJJJkkk
-CHANNEL_USERNAME=@blacklistguests
-ADMIN_IDS=123456789,987654321
-ADMIN_IDS — Telegram ID модераторов через запятую
-Узнать свой ID можно у бота @userinfobot
-
-🚀 Установка на сервер (Ubuntu)
-sudo apt update
-sudo apt install -y git python3-venv
-sudo mkdir -p /opt/blacklistguestsbot
-sudo chown $USER:$USER /opt/blacklistguestsbot
-cd /opt/blacklistguestsbot
-
-git clone https://github.com/<ТВОЙ_ЛОГИН>/blacklistguestsbot.git .
-python3 -m venv .venv
-source .venv/bin/activate
-pip install --upgrade pip
-pip install -r requirements.txt
-
-nano .env    # вставь данные из примера выше
-
-Проверка работы:
-python run.py
-Если бот отвечает в Telegram → всё ок ✅
-Останавливаешь (Ctrl + C) и создаёшь systemd-сервис.
-
-🧩 systemd-сервис /etc/systemd/system/blacklistguestsbot.service
-[Unit]
-Description=Telegram bot: blacklistguestsbot
-After=network.target
-
-[Service]
-Type=simple
-User=admin               # имя пользователя на сервере
-WorkingDirectory=/opt/blacklistguestsbot
-ExecStart=/opt/blacklistguestsbot/.venv/bin/python /opt/blacklistguestsbot/run.py
-Restart=always
-
-[Install]
-WantedBy=multi-user.target
-
-Активировать:
-sudo systemctl daemon-reload
-sudo systemctl enable blacklistguestsbot
-sudo systemctl start blacklistguestsbot
-sudo systemctl status blacklistguestsbot
-
-Проверить логи:
-sudo journalctl -u blacklistguestsbot -f
-
-
-🔄 Обновление бота через Git
-
-На локальной машине:
-git add .
-git commit -m "feat: добавлена модерация постов"
-git push origin main
-
-На сервере:
-ssh root@your-server
-cd /opt/blacklistguestsbot
-git pull
-source .venv/bin/activate
-pip install -r requirements.txt   # если менялись зависимости
-sudo systemctl restart blacklistguestsbot
-sudo systemctl status blacklistguestsbot
-
-🛠️ Полезные команды
-sudo systemctl stop blacklistguestsbot      # остановить
-sudo systemctl start blacklistguestsbot     # запустить
-sudo systemctl restart blacklistguestsbot   # перезапустить
-sudo systemctl status blacklistguestsbot    # статус
-sudo journalctl -u blacklistguestsbot -f    # логи
-
-💡 План будущих улучшений
- Предпросмотр поста перед отправкой на модерацию
-
- Хранение всех кейсов в базе (поиск по номеру телефона)
-
- Подсветка «злостных нарушителей» (гость встречается несколько раз)
-
- Возможность модератору запросить уточнение у автора
-
- Inline-поиск по базе гостей прямо в Telegram
-
- Отчёты и статистика для админов
-
-Автор: @t0nc0
+В репозитории нет файла `LICENSE`: открытая лицензия на использование или распространение кода не заявлена.
